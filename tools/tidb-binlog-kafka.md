@@ -73,10 +73,10 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
 
     为了保证数据的完整性，在 pump 运行 10 分钟左右后按顺序进行下面的操作
 
-    *  使用 generate_binlog_position 工具生成 drainer 启动需要的 savepint 文件，工具在项目 [tidb-tools](https://github.com/pingcap/tidb-tools) 中，make generate_binlog_position 编译该工具，具体的使用参考工具的 README 说明。
+    *  使用 generate_binlog_position 工具生成 drainer 启动需要的 savepoint 文件，工具在项目 [tidb-tools](https://github.com/pingcap/tidb-tools) 中，make generate_binlog_position 编译该工具，具体的使用参考工具的 README 说明。
     *  全量备份，例如 mydumper 备份 tidb
     *  全量导入备份到目标系统
-    *  设置 savepoint 文件路径，然后启动 drainer， `bin/drainer --config=conf/drainer.toml --data-dir=${drainer_savepoint_dir}`
+    *  kafka 版 drainer 的 savepoint 默认保存在下游 database tidb_binlog 下的 checkpoint 表中，如果 checkpoint 表中没有有效的数据，可以通过上   述的 savepoint 文件获取，然后启动 drainer， `bin/drainer --config=conf/drainer.toml --initial-commit-    ts=${drainer_savepoint_dir/commitTS}`
 
 *   drainer 输出的 pb, 需要在配置文件设置下面的参数
 
@@ -108,6 +108,18 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
 
 #### 使用 Binary 部署 PUMP
 
+  使用样例：
+  假设我们有三个PD，三个zookeeper，一个TiDB,各个节点信息如下
+   ```
+   TiDB="192.168.0.10"
+   PD1="192.168.0.16"
+   PD2="192.168.0.15"
+   PD3="192.168.0.14"
+   ZK1="192.168.0.13"
+   ZK2="192.168.0.12"
+   ZK3="192.168.0.11"
+   ```
+
 1. PUMP 命令行参数说明
 
     ```
@@ -117,18 +129,16 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     -V
         打印版本信息
     -addr string
-        pump 提供服务的 rpc 地址(默认 "127.0.0.1:8250")
+        pump 提供服务的 rpc 地址(-addr="192.168.0.10:8250")
     -advertise-addr string
-        pump 对外提供服务的 rpc 地址(默认 "127.0.0.1:8250")
+        pump 对外提供服务的 rpc 地址(-advertise-addr="192.168.0.10:8250")
     -config string
         配置文件路径,如果你指定了配置文件，pump 会首先读取配置文件的配置
         如果对应的配置在命令行参数里面也存在，pump 就会使用命令行参数的配置来覆盖配置文件里面的
     -data-dir string
         pump 数据存储位置路径
-    -kafka-addrs string
-        连接的 kafka 的地址 (默认 "127.0.0.1:9092")
-    -zookeeper-addrs string
-        zookeeper 地址，如果设置了该选项则从 zookeeper 中获取 kafka 地址，如果不设置则使用 kafka-addrs 的值
+    -zookeeper-addrs string (-zookeeper_addrs = "192.168.0.11:2181,192.168.0.12:2181,192.168.0.13:2181")
+        zookeeper 地址，该选项从 zookeeper 中获取 kafka 地址
     -gc int
         日志最大保留天数 (默认 7)， 设置为 0 可永久保存
     -heartbeat-interval uint
@@ -142,7 +152,7 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     -metrics-interval int
        监控信息上报频率 (默认 15，单位 秒)
     -pd-urls string
-        pd 集群节点的地址 (默认 "http://127.0.0.1:2379")
+        pd 集群节点的地址 (-pd-urls="http://192.168.0.16:2379:http://192.168.0.15:2379:http://192.168.0.14:2379")
     -socket string
         unix socket 模式服务监听地址 (默认 unix:///tmp/pump.sock)
     ```
@@ -152,22 +162,20 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
 
     ```toml
     # pump Configuration.
-    # pump 提供服务的 rpc 地址(默认 "127.0.0.1:8250")
-    addr = "127.0.0.1:8250"
-    # pump 对外提供服务的 rpc 地址(默认 "127.0.0.1:8250")
+    # pump 提供服务的 rpc 地址("192.168.0.10:8250")
+    addr = "192.168.0.10:8250"
+    # pump 对外提供服务的 rpc 地址("192.168.0.10:8250")
     advertise-addr = ""
     # binlog 最大保留天数 (默认 7)， 设置为 0 可永久保存
     gc = 7
     #  pump 数据存储位置路径
     data-dir = "data.pump"
-    # 连接的 kafka 的地址(默认 "127.0.0.1:9092")
-    kafka-addrs = "127.0.0.1:9092"
-    # zookeeper 地址，如果设置了该选项则从 zookeeper 中获取 kafka 地址，如果不设置则使用 kafka-addrs 的值
-    # zookeeper-addrs = "127.0.0.1:2181"
+    # zookeeper 地址，设置该选项从 zookeeper 中获取 kafka 地址
+    # zookeeper-addrs = "192.168.0.11:2181:192.168.0.12:2181:192.168.0.13:2181"
     # pump 向 pd 发送心跳间隔 (单位 秒)    
     heartbeat-interval = 3
-    # pd 集群节点的地址 (默认 "http://127.0.0.1:2379")
-    pd-urls = "http://127.0.0.1:2379"
+    # pd 集群节点的地址
+    pd-urls = "http://192.168.0.16:2379:http://192.168.0.15:2379:http://192.168.0.14:2379"
     # unix socket 模式服务监听地址 (默认 unix:///tmp/pump.sock)
     socket = "unix:///tmp/pump.sock"
     ```
@@ -189,7 +197,7 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     -V
         打印版本信息
     -addr string
-        drainer 提供服务的地址(默认 "127.0.0.1:8249")
+        drainer 提供服务的地址(-addr="192.168.0.10:8249")
     -c int
         同步下游的并发数，该值设置越高同步的吞吐性能越好 (default 1)
     -config string
@@ -197,10 +205,8 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
        如果对应的配置在命令行参数里面也存在，drainer 就会使用命令行参数的配置来覆盖配置文件里面的
     -data-dir string
         drainer 数据存储位置路径 (默认 "data.drainer")
-    -kafka-addrs string
-        连接的 kafka 的地址 (默认 "127.0.0.1:9092")
     -zookeeper-addrs string
-        zookeeper 地址，如果设置了该选项则从 zookeeper 中获取 kafka 地址，如果不设置则使用 kafka-addrs 的值  
+        zookeeper 地址，该选项从 zookeeper 中获取 kafka 地址
     -dest-db-type string
         drainer 下游服务类型 (默认为 mysql)
     -detect-interval int
@@ -208,12 +214,12 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     -disable-dispatch
         是否禁用拆分单个 binlog 的 sqls 的功能，如果设置为 true，则按照每个 binlog
         顺序依次还原成单个事务进行同步( 下游服务类型为 mysql, 该项设置为 False )
-    -gen-savepoint
-        如果设置为 true, 则只生成 drainer 的 savepoint meta 文件, 可以配合 mydumper 使用
     -ignore-schemas string
         db 过滤列表 (默认 "INFORMATION_SCHEMA,PERFORMANCE_SCHEMA,mysql,test"),
         不支持对 ignore schemas 的 table 进行 rename DDL 操作
-    -log-file string
+    -initial-commit-ts (默认为 0)
+        如果 drainer 没有相关的断点信息，可以通过该项来设置相关的断点信息
+    -log-file string
         log 文件路径
     -log-rotate string
         log 文件切换频率, hour/day
@@ -222,7 +228,7 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     -metrics-interval int
        监控信息上报频率 (默认 15，单位 秒)
     -pd-urls string
-       pd 集群节点的地址 (默认 "http://127.0.0.1:2379")
+       pd 集群节点的地址 (-pd-urls="http://192.168.0.16:2379:http://192.168.0.15:2379:http://192.168.0.14:2379")
     -txn-batch int
        输出到下游数据库一个事务的 sql 数量 (default 1)
     ```
@@ -233,8 +239,8 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     ```toml
     # drainer Configuration.
 
-    # drainer 提供服务的地址(默认 "127.0.0.1:8249")
-    addr = "127.0.0.1:8249"
+    # drainer 提供服务的地址("192.168.0.10:8249")
+    addr = "192.168.0.10:8249"
 
     # 向 pd 查询在线 pump 的时间间隔 (默认 10，单位 秒)
     detect-interval = 10
@@ -242,14 +248,11 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
     # drainer 数据存储位置路径 (默认 "data.drainer")
     data-dir = "data.drainer"
     
-    # 连接的 kafka 的地址 (默认 "127.0.0.1:9092")
-    kafka-addrs = "127.0.0.1:9092"
+    # zookeeper 地址，该选项则从 zookeeper 中获取 kafka 地址
+    # zookeeper-addrs = "192.168.0.10:2181"
     
-    # zookeeper 地址，如果设置了该选项则从 zookeeper 中获取 kafka 地址，如果不设置则使用 kafka-addrs 的值
-    # zookeeper-addrs = "127.0.0.1:2181"
-    
-    # pd 集群节点的地址 (默认 "http://127.0.0.1:2379")
-    pd-urls = "http://127.0.0.1:2379"
+    # pd 集群节点的地址
+    pd-urls = "http://192.168.0.16:2379:http://192.168.0.15:2379:http://192.168.0.14:2379"
 
     # log 文件路径
     log-file = "drainer.log"
@@ -291,7 +294,7 @@ Kafka 集群用来存储由 Pump 写入的 binlog 数据，并提供给 Drainer 
 
     # db-type 设置为 mysql 时，下游数据库服务器参数
     [syncer.to]
-    host = "127.0.0.1"
+    host = "192.168.0.10"
     user = "root"
     password = ""
     port = 3306
